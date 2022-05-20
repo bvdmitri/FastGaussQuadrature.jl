@@ -19,6 +19,8 @@ julia> zeros = (x -> besselj(ν, x)).(roots);
 julia> all(zeros .< 1e-12)
 true
 ```
+
+See also: [`FastGaussQuadrature.approx_besselroots!`](@ref)
 """
 function approx_besselroots(ν::Real, n::Integer)
     # FIXME (related issue #22 and #80)
@@ -26,6 +28,19 @@ function approx_besselroots(ν::Real, n::Integer)
 end
 
 function approx_besselroots(ν::Float64, n::Integer)
+    return approx_besselroots!(Vector{Float64}(undef, n), ν, n)
+end
+
+function approx_besselroots!(x::AbstractVector, ν::Real, n::Integer)
+    return approx_besselroots!(x, Float64(ν), n)
+end
+
+"""
+In-place version of the `approx_besselroots!`.
+
+See also: [`FastGaussQuadrature.approx_besselroots`](@ref)
+"""
+function approx_besselroots!(x::AbstractVector{T}, ν::Float64, n::Integer) where {T}
 # DEVELOPERS NOTES:
 #   ν = 0 --> Full Float64 precision for n ≤ 20 (Wolfram Alpha), and very
 #     accurate approximations for n > 20 (McMahon's expansion)
@@ -41,25 +56,27 @@ function approx_besselroots(ν::Float64, n::Integer)
     if n < 0
         throw(DomainError(n, "Input n must be a non-negative integer"))
     end
+    if length(x) < n
+        throw(ArgumentError("Input container length must greater than n"))
+    end
 
-    x = zeros(n)
     if ν == 0
-        for k in 1:min(n,20)
+        @inbounds for k in 1:min(n,20)
             x[k] = BESSELJ0_ROOTS[k]
         end
-        for k in min(n,20)+1:n
+        @inbounds for k in min(n,20)+1:n
             x[k] = McMahon(ν, k)
         end
     elseif -1 ≤ ν ≤ 5
         correctFirstFew = piessens(ν)
-        for k in 1:min(n,6)
+        @inbounds for k in 1:min(n,6)
             x[k] = correctFirstFew[k]
         end
-        for k in min(n,6)+1:n
+        @inbounds for k in min(n,6)+1:n
             x[k] = McMahon(ν, k)
         end
     elseif 5 < ν
-        for k in 1:n
+        @inbounds for k in 1:n
             x[k] = McMahon(ν, k)
         end
     end

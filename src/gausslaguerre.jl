@@ -20,12 +20,23 @@ true
 ```
 """
 function gausslaguerre(n::Integer)
-    return gausslaguerre(n, 0.0)
+    return gausslaguerre!(Vector{Float64}(undef, max(zero(n), n)), Vector{Float64}(undef, max(zero(n), n)), n)
+end
+
+"""
+    gausslaguerre!(x::AbstractVector{T}, w::AbstractVector{T}, n::Integer) where { T }
+
+In-place version of `gausslaguerre(n)` function. `x` and `w` should have `length` greater or equal to `n`.
+
+See also: [`gausslaguerre`](@ref).
+"""
+function gausslaguerre!(x::AbstractVector{T}, w::AbstractVector{T}, n::Integer) where { T }
+    return gausslaguerre!(x, w, n, 0.0)
 end
 
 
 @doc raw"""
-    gausslaguerre(n::Integer, α::Real) -> x, w  # nodes, weights
+    gausslaguerre(n::Integer, α::Real; reduced = false) -> x, w  # nodes, weights
 
 Return nodes `x` and weights `w` of generalized [Gauss-Laguerre quadrature](https://en.wikipedia.org/wiki/Gauss%E2%80%93Laguerre_quadrature).
 
@@ -57,39 +68,63 @@ user can manually invoke the following routines:
 - `gausslaguerre_rec`: computation based on Newton iterations applied to evaluation
    using the recurrence relation
 - `gausslaguerre_asy`: the asymptotic expansions
+
+See also: [`gausslaguerre!`](@ref)
 """
-function gausslaguerre(n::Integer, α::Real; reduced = false)
+function gausslaguerre(n::Integer, α::Real; reduced = false) 
+    # Guess the numerical type from the supplied type of α
+    # Although the code is generic, the heuristics are derived for Float64 precision
+    T = typeof(float(α))
+    return gausslaguerre!(Vector{T}(undef, max(zero(n), n)), Vector{T}(undef, n), max(zero(n), n), α; reduced = reduced)
+end
+
+"""
+    gausslaguerre!(x::AbstractVector{T}, w::AbstractVector{T}, n::Integer, α::Real; reduced = false) where { T }
+
+In-place version of `gausslaguerre(n, α)` function. `x` and `w` should have `length` greater or equal to `n`.
+Note that this function may adjust `length` of the input `x` and `w` in case of `reduced = true`.
+
+See also: [`gausslaguerre`](@ref).
+"""
+function gausslaguerre!(x::AbstractVector{T}, w::AbstractVector{T}, n::Integer, α::Real; reduced = false) where { T }
     if α ≤ -1
         throw(DomainError(α, "The Laguerre parameter α ≤ -1 corresponds to a nonintegrable weight function"))
     end
     if n < 0
         throw(DomainError(n, "gausslaguerre($n,$α) not defined: n must be positive."))
     end
+    if length(x) < n
+        throw(ArgumentError("Sigma points container with length $(length(x)) does not have enough space to store n = $(n) sigma points."))
+    end
+    if length(w) < n 
+        throw(ArgumentError("Weights container with length $(length(x)) does not have enough space to store n = $(n) weights."))
+    end
 
-    # Guess the numerical type from the supplied type of α
-    # Although the code is generic, the heuristics are derived for Float64 precision
-    T = typeof(float(α))
     if n == 0
-        T[],T[]
+        x, w
     elseif n == 1
-        [1+α], [gamma(1+α)]
+        @inbounds x[begin] = 1 + α
+        @inbounds w[begin] = gamma(1+α)
+        x, w
     elseif n == 2
-        [α + 2-sqrt(α+2),α+2+sqrt(α+2)],
-        [((α-sqrt(α+2)+2)*gamma(α+2))/(2*(α+2)*(sqrt(α+2)-1)^2),
-         ((α+sqrt(α+2)+2)*gamma(α+2))/(2*(α+2)*(sqrt(α+2)+1)^2)]
+        @inbounds x[begin] = α + 2 - sqrt(α + 2)
+        @inbounds x[begin + 1] = α + 2 + sqrt(α + 2)
+        @inbounds w[begin] = ((α-sqrt(α+2)+2)*gamma(α+2))/(2*(α+2)*(sqrt(α+2)-1)^2)
+        @inbounds w[begin + 1] = ((α+sqrt(α+2)+2)*gamma(α+2))/(2*(α+2)*(sqrt(α+2)+1)^2)
+        x, w
     elseif n < 15
         # Use Golub-Welsch for small n
-        gausslaguerre_GW(n, α)
+        gausslaguerre_GW!(x, w, n, α)
     elseif n < 128
         # Use the recurrence relation for moderate n
-        gausslaguerre_rec(n, α)
+        gausslaguerre_rec!(x, w, n, α)
     else
         # Use explicit asymptotic expansions for larger n
         # The restriction to α comes from the restriction on ν in besselroots
         if α < 5
-            gausslaguerre_asy(n, α, reduced=reduced, T=-1, recompute=true)
+            gausslaguerre_asy!(x, w, n, α, reduced=reduced, T=-1, recompute=true)
         else
-            gausslaguerre_rec(n, α)
+            gausslaguerre_rec!(x, w, n, α)
         end
     end
 end
@@ -105,21 +140,41 @@ Optional parameters are:
 - `reduced`: compute a reduced quadrature rule, discarding all points and weights as soon as the weights underflow
 - `T`: the order of the expansion. Set `T=-1` to determine the order adaptively depending on the size of the terms in the expansion
 - `recompute`: if a crude measure of the error is larger than a tolerance, the point and weight are recomputed using the (slower) recursion+newton approach, yielding more reliable accurate results.
+
+See also: [`FastGaussQuadrature.gausslaguerre_asy!`](@ref)
 """
 function gausslaguerre_asy(n::Integer, α;
     reduced = false,
     T = max(1, ceil(Int, 50/log(n))),  # Heuristic for number of terms
     recompute = false)
 
+    # Guess the numerical type from the supplied type of α
+    # Although the code is generic, the heuristics are derived for Float64 precision
+    ELT = typeof(float(α))
+    return gausslaguerre_asy!(Vector{ELT}(undef, n), Vector{ELT}(undef, n), n, α; reduced = reduced, T = T, recompute = recompute)
+end
+
+"""
+In-place version of `gausslaguerre_asy`. Note that `length` of `x` and `w` might be adjusted if `reduced = true`.
+
+See also: [`FastGaussQuadrature.gausslaguerre_asy`](@ref)
+"""
+function gausslaguerre_asy!(x::AbstractVector{ELT}, w::AbstractVector{ELT}, n::Integer, α;
+    reduced = false,
+    T = max(1, ceil(Int, 50/log(n))),  # Heuristic for number of terms
+    recompute = false) where {ELT}
+
     if α^2/n > 1
         @warn "A large value of α may lead to inaccurate results."
     end
+    if length(x) < n
+        throw(ArgumentError("Sigma points container with length $(length(x)) does not have enough space to store n = $(n) sigma points."))
+    end
+    if length(w) < n 
+        throw(ArgumentError("Weights container with length $(length(x)) does not have enough space to store n = $(n) weights."))
+    end
 
-    ELT = typeof(float(α))
-
-    n_alloc = reduced ? 0 : n
-    x = zeros(ELT, n_alloc)
-    w = zeros(ELT, n_alloc)
+    n_computed = 0
 
     # The expansions are given in powers of 1/(4n+2α+2)
     d = one(ELT)/(4n+2α+2)
@@ -130,7 +185,7 @@ function gausslaguerre_asy(n::Integer, α;
 
     # The Bessel region
     # First compute the roots of the Bessel function of order α
-    jak_vector = approx_besselroots(α, k_bessel)
+    jak_vector = approx_besselroots!(x, α, k_bessel)
 
     bessel_wins = true
     k = 0
@@ -157,15 +212,16 @@ function gausslaguerre_asy(n::Integer, α;
                 end
             end
         end
-        if reduced
-            if abs(wk) < underflow_threshold(ELT)
-                return x, w
-            else
-                push!(x, xk); push!(w, wk)
-            end
-        else
-            x[k] = xk; w[k] = wk
+        if reduced && abs(wk) < underflow_threshold(ELT)
+            resize!(x, n_computed)
+            resize!(w, n_computed)
+            return x, w
         end
+
+        @inbounds x[k] = xk
+        @inbounds w[k] = wk
+    
+        n_computed += 1
     end
 
     # The bulk region
@@ -182,15 +238,16 @@ function gausslaguerre_asy(n::Integer, α;
                 end
             end
         end
-        if reduced
-            if abs(wk) < underflow_threshold(ELT)
-                return x, w
-            else
-                push!(x, xk); push!(w, wk)
-            end
-        else
-            x[k] = xk; w[k] = wk
+        if reduced && abs(wk) < underflow_threshold(ELT)
+            resize!(x, n_computed)
+            resize!(w, n_computed)
+            return x, w
         end
+
+        @inbounds x[k] = xk; 
+        @inbounds w[k] = wk
+
+        n_computed += 1
     end
 
     # - Then we compare to Airy until it wins, and then we switch to just Airy
@@ -214,15 +271,13 @@ function gausslaguerre_asy(n::Integer, α;
                 end
             end
         end
-        if reduced
-            if abs(wk) < underflow_threshold(ELT)
-                return x, w
-            else
-                push!(x, xk); push!(w, wk)
-            end
-        else
-            x[k] = xk; w[k] = wk
+        if reduced && abs(wk) < underflow_threshold(ELT)
+            resize!(x, n_computed)
+            resize!(w, n_computed)
         end
+        @inbounds x[k] = xk
+        @inbounds w[k] = wk
+        n_computed += 1
     end
 
     # The Airy region
@@ -238,15 +293,13 @@ function gausslaguerre_asy(n::Integer, α;
                 end
             end
         end
-        if reduced
-            if abs(wk) < underflow_threshold(ELT)
-                return x, w
-            else
-                push!(x, xk); push!(w, wk)
-            end
-        else
-            x[k] = xk; w[k] = wk
+        if reduced && abs(wk) < underflow_threshold(ELT)
+            resize!(x, n_computed)
+            resize!(w, n_computed)
+            return x, w
         end
+        @inbounds x[k] = xk
+        @inbounds w[k] = wk
     end
 
     # Sanity check
@@ -583,15 +636,35 @@ end
 """
 Calculate Gauss-Laguerre nodes and weights from the eigenvalue decomposition of
 the Jacobi matrix.
+
+See also: [`FastGaussQuadrature.gausslaguerre_GW!`](@ref)
 """
-function gausslaguerre_GW(n, α)
+function gausslaguerre_GW(n, α) 
+    # Guess the numerical type from the supplied type of α
+    # Although the code is generic, the heuristics are derived for Float64 precision
+    T = typeof(float(α))
+    return gausslaguerre_GW!(Vector{T}(undef, n), Vector{T}(undef, n), n, α)
+end
+
+"""
+In-place version of `gausslaguerre_GW(n, α)`.
+
+See also: [`FastGaussQuadrature.gausslaguerre_GW`](@ref)
+"""
+function gausslaguerre_GW!(x::AbstractVector{T}, w::AbstractVector{T}, n, α) where { T }
     _α = 2*(1:n) .+ (α-1)  # 3-term recurrence coeffs a and b
     β = sqrt.( (1:n-1).*(α .+ (1:n-1)) )
-    T = SymTridiagonal(promote(collect(_α), β)...)
-    x, V = eigen(T)  # eigenvalue decomposition
-    w = gamma(α+1)*V[1,:].^2  # Quadrature weights
-    return x, vec(w)
+    S = SymTridiagonal(promote(collect(_α), β)...)
+    _x, V = eigen!(S)  # eigenvalue decomposition
+    copyto!(x, _x)
+    _g = gamma(α+1)
+    for (i, v) in zip(eachindex(w), view(V, 1, :))
+        @inbounds w[i] = _g * v^2 # Quadrature weights
+    end
+    return x, w
 end
+
+
 
 
 ########################## Routines for the forward recurrence ##########################
@@ -630,22 +703,41 @@ function gl_rec_newton(x0, n, α; maxiter = 20, computeweight = true)
     return xk, wk
 end
 
-"Compute Gauss-Laguerre rule based on the recurrence relation, using Newton iterations on an initial guess."
-function gausslaguerre_rec(n, α; reduced = false)
-    T = typeof(float(α))
+"""
+Compute Gauss-Laguerre rule based on the recurrence relation, using Newton iterations on an initial guess.
 
-    n_alloc = reduced ? 0 : n
-    w = zeros(T, n_alloc)
-    x = zeros(T, n_alloc)
+See also: [`FastGaussQuadrature.gausslaguerre_rec!`](@ref)
+"""
+function gausslaguerre_rec(n, α; reduced = false)
+    # Guess the numerical type from the supplied type of α
+    # Although the code is generic, the heuristics are derived for Float64 precision
+    T = typeof(float(α))
+    return gausslaguerre_rec!(Vector{T}(undef, n), Vector{T}(undef, n), n, α; reduced = reduced)
+end
+
+"""
+In-place version of `gausslaguerre_rec`. Note that `length` of `x` and `w` might be overwritten when `reduced = true`.
+
+See also: [`FastGaussQuadrature.gausslaguerre_rec`](@ref)
+"""
+function gausslaguerre_rec!(x::AbstractVector{T}, w::AbstractVector{T}, n, α; reduced = false) where { T }
+    if length(x) < n
+        throw(ArgumentError("Sigma points container with length $(length(x)) does not have enough space to store n = $(n) sigma points."))
+    end
+    if length(w) < n 
+        throw(ArgumentError("Weights container with length $(length(x)) does not have enough space to store n = $(n) weights."))
+    end
+    n_computed = 0
 
     # We compute up to 7 starting values for the Newton iterations
     n_pre = min(n, 7)
 
     ν = 4n + 2α + 2
-    x_pre = T.(approx_besselroots(α, n_pre)).^2 / ν # this is a lower bound by [DLMF 18.16.10]
+    x_pre = approx_besselroots!(x, α, n_pre)
+    map!((x) -> x^2 / ν, x_pre, x_pre) # this is a lower bound by [DLMF 18.16.10]
 
     noUnderflow = true  # this flag turns false once the weights start to underflow
-    for k in 1:n
+    @inbounds for k in 1:n
         # Use sextic extrapolation for a new initial guess
         xk = (k ≤ n_pre) ? x_pre[k] : 7*x[k-1] -21*x[k-2] +35*x[k-3] -35*x[k-4] +21*x[k-5] -7*x[k-6] +x[k-7]
 
@@ -654,16 +746,16 @@ function gausslaguerre_rec(n, α; reduced = false)
             noUnderflow = false
         end
 
-        if reduced
-            if !noUnderflow
-                return x, w
-            else
-                push!(x, xk); push!(w, wk)
-            end
-        else
-            x[k] = xk
-            w[k] = wk
+        if reduced && !noUnderflow
+            resize!(x, n_computed)
+            resize!(w, n_computed)
+            return x, w
         end
+
+        x[k] = xk
+        w[k] = wk
+
+        n_computed += 1
     end
 
     return x, w
