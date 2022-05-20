@@ -303,7 +303,7 @@ function gausslaguerre_asy!(x::AbstractVector{ELT}, w::AbstractVector{ELT}, n::I
     end
 
     # Sanity check
-    if ( minimum(x) < 0.0 ) || ( maximum(x) > 4*n + 2*α + 2 ) ||  ( minimum(diff(x)) ≤ 0.0 ) || (minimum(w) < 0.0)
+    if ( minimum(view(x, 1:n)) < 0.0 ) || ( maximum(view(x, 1:n)) > 4*n + 2*α + 2 ) ||  ( minimum(diff(view(x, 1:n))) ≤ 0.0 ) || (minimum(view(w, 1:n)) < 0.0)
         @warn "Unexpected inconsistency in the computation of nodes and weights"
     end
 
